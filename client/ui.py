@@ -6,6 +6,23 @@ from client import rpc
 from tkinter import *
 from tkinter import messagebox
 from tkinter.ttk import *
+import queue
+
+
+
+# Set up a global incoming message queue.
+message_queue = queue.Queue()
+
+
+"""
+Handles commands pushed from the server.
+"""
+class Handler(rpc.Handler):
+    """
+    Puts an incoming message into the message queue.
+    """
+    def receive_message(self, **kwargs):
+        message_queue.put(kwargs)
 
 
 """
@@ -18,9 +35,8 @@ class LoginWindow:
     default_address = "0.0.0.0"
     default_port = 6543
 
-    def __init__(self, window, handler):
+    def __init__(self, window):
         self.window = window
-        self.handler = handler
         self.frame = None
         self.proxy = None
         self.username = StringVar()
@@ -155,7 +171,7 @@ class LoginWindow:
         port = int(self.port_entry.get())
 
         try:
-            self.proxy = rpc.connect(address, port, self.handler)
+            self.proxy = rpc.connect(address, port, Handler)
             self.show_login()
         except Exception as e:
             messagebox.showerror("", "Could not connect to server.\n\nError: " + str(e))
@@ -213,6 +229,9 @@ class LoginWindow:
         self.window.destroy()
 
 
+"""
+Main application window.
+"""
 class ChatWindow:
     def __init__(self, window, proxy, token):
         self.window = window
@@ -238,38 +257,162 @@ class ChatWindow:
         self.friends_frame.grid(row=0, column=2, sticky=N+S+E+W, padx=10, pady=10)
 
         # Groups frame.
-        Label(self.group_frame, text="Groups").pack()
+        Label(self.group_frame, text="Groups").grid()
+        self.group_frame.rowconfigure(1, weight=1)
+        self.group_list = None
+        Button(self.group_frame, text="Create group", command=self.create_group).grid(row=2)
 
         # Friends frame.
-        Label(self.friends_frame, text="Friends").pack()
+        Label(self.friends_frame, text="Friends").grid()
+        self.friends_frame.rowconfigure(1, weight=1)
+        self.friends_list = None
+        Button(self.friends_frame, text="Add friend", command=self.add_friend).grid(row=2)
 
         # Set up the chat log frame.
-        self.message_frame.rowconfigure(0, weight=1)
+        self.message_frame.rowconfigure(1, weight=1)
         self.message_frame.columnconfigure(0, weight=1)
-        self.message_history = Text(self.message_frame)
-        self.message_history.grid(row=0, column=0, sticky=N+S+E+W)
+        self.message_title = Label(self.message_frame)
+        self.message_title.grid(row=0, column=0, columnspan=2, sticky=N+S+E+W)
+        self.message_history = Listbox(self.message_frame)
+        self.message_history.grid(row=1, column=0, sticky=N+S+E+W)
         self.message_scrollbar = Scrollbar(self.message_frame)
-        self.message_scrollbar.grid(row=0, column=1, sticky=N+S+E+W)
+        self.message_scrollbar.grid(row=1, column=1, sticky=N+S+E+W)
         self.message_scrollbar.config(command=self.message_history.yview)
         self.message_history.config(yscrollcommand=self.message_scrollbar.set)
 
         # Set up the message input.
         self.chat_entry = Entry(self.message_frame)
         self.chat_entry.bind("<Return>", self.send_message)
-        self.chat_entry.grid(row=1, column=0, columnspan=2, sticky=N+S+E+W, pady=5, ipady=5)
+        self.chat_entry.grid(row=2, column=0, columnspan=2, sticky=N+S+E+W, pady=(5, 0), ipady=5)
         self.chat_entry.focus_set()
 
+        # Show remote data.
+        self.refresh_groups_list()
+        self.refresh_friends_list()
+
+        # Schedule the incoming message callback.
+        self.window.after(100, self.check_message_queue)
+
+    """
+    Refreshes the list of groups from the server.
+    """
+    def refresh_groups_list(self):
+        groups = self.proxy.get_groups(token=self.token)
+
+        if self.group_list:
+            self.group_list.destroy()
+
+        self.group_list = Frame(self.group_frame)
+        for i, group in enumerate(groups):
+            label = Button(self.group_list, text=group, command=lambda: self.choose_group(group))
+            label.grid(row=i, sticky=E+W)
+        self.group_list.grid(row=1)
+
+    """
+    Refreshes the list of friends from the server.
+    """
+    def refresh_friends_list(self):
+        friends = self.proxy.get_friends(token=self.token)
+
+        if self.friends_list:
+            self.friends_list.destroy()
+
+        self.friends_list = Frame(self.friends_frame)
+        for i, username in enumerate(friends):
+            label = Button(self.friends_list, text=username, command=lambda: self.choose_user(username))
+            label.grid(row=i, sticky=E+W)
+        self.friends_list.grid(row=1)
+
+    def create_group(self):
+        return
+
+    """
+    Shows a dialog for adding a friend.
+    """
+    def add_friend(self):
+        username = PromptWindow.prompt(self.window, "Type in a username")
+        self.proxy.add_friend(token=self.token, username=username)
+        self.refresh_friends_list()
+
+    """
+    Sets the message destination to a user.
+    """
+    def choose_user(self, username):
+        self.dest_username = username
+        self.message_title.config(text=username)
+
+    """
+    Sets the message destination to a group.
+    """
+    def choose_group(self, group):
+        self.dest_group = group
+        self.message_title.config(text=self.proxy.get_group(group)["name"])
+
     def send_message(self, event):
-        print("Message to send:", self.chat_entry.get())
+        text = self.chat_entry.get()
+
+        if text[0] == "/":
+            exec(text[1:])
+        else:
+            if self.dest_username:
+                self.proxy.send_message(
+                    token=self.token,
+                    receiver={
+                        "type": "user",
+                        "username": self.dest_username,
+                    },
+                    text=text
+                )
+
         self.chat_entry.delete(0, END)
 
+    def check_message_queue(self):
+        while True:
+            try:
+                message = message_queue.get(False)
+                self.message_history.insert(END, message["sender"] + ": " + message["text"])
+            except queue.Empty:
+                break
+
+        # Schedule again.
+        self.window.after(100, self.check_message_queue)
+
     def close(self):
-        self.proxy.logout(token=self.token)
-        self.proxy.close()
+        try:
+            self.proxy.logout(token=self.token)
+            self.proxy.close()
+        finally:
+            self.window.destroy()
+
+
+"""
+Convenience class for creating "prompt" dialog boxes.
+"""
+class PromptWindow:
+    def prompt(root, title):
+        window = PromptWindow(root, title)
+        root.wait_window(window.window)
+        return window.result
+
+    def __init__(self, root, title):
+        self.window = Toplevel(root)
+        self.window.resizable(width=FALSE, height=FALSE)
+        self.window.title(title)
+
+        self.label = Label(self.window, text=title)
+        self.label.grid()
+        self.entry = Entry(self.window)
+        self.entry.bind("<Return>", lambda e: self.submit)
+        self.entry.grid(row=1)
+        self.button = Button(self.window, text="OK", command=self.submit)
+        self.button.grid(row=2)
+
+    def submit(self):
+        self.result = self.entry.get()
         self.window.destroy()
 
 
-def run(handler):
+def run():
     # Set up root window.
     root = Tk()
 
@@ -279,6 +422,6 @@ def run(handler):
     style.configure("Title.TLabel", font=("Helvetica", 16))
 
     # Show window.
-    window = LoginWindow(root, handler)
+    window = LoginWindow(root)
     window.center()
     root.mainloop()
