@@ -495,7 +495,7 @@ def run():
     style = Style()
     if "vista" in style.theme_names():
         style.theme_use("vista")
-    if "aqua" in style.theme_names():
+    elif "aqua" in style.theme_names():
         style.theme_use("aqua")
     else:
         style.theme_use("clam")
