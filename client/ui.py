@@ -237,6 +237,8 @@ class ChatWindow:
         self.window = window
         self.proxy = proxy
         self.token = token
+        self.dest_username = None
+        self.dest_group = None
 
         window.protocol("WM_DELETE_WINDOW", self.close)
         window.minsize(width=200, height=200)
@@ -260,29 +262,29 @@ class ChatWindow:
         Label(self.group_frame, text="Groups").grid()
         self.group_frame.rowconfigure(1, weight=1)
         self.group_list = None
-        Button(self.group_frame, text="Create group", command=self.create_group).grid(row=2)
+        Button(self.group_frame, text="Create group", command=self.on_create_group).grid(row=2)
 
         # Friends frame.
         Label(self.friends_frame, text="Friends").grid()
         self.friends_frame.rowconfigure(1, weight=1)
         self.friends_list = None
-        Button(self.friends_frame, text="Add friend", command=self.add_friend).grid(row=2)
+        Button(self.friends_frame, text="Add friend", command=self.on_add_friend).grid(row=2)
 
         # Set up the chat log frame.
         self.message_frame.rowconfigure(1, weight=1)
         self.message_frame.columnconfigure(0, weight=1)
         self.message_title = Label(self.message_frame)
         self.message_title.grid(row=0, column=0, columnspan=2, sticky=N+S+E+W)
-        self.message_history = Listbox(self.message_frame)
-        self.message_history.grid(row=1, column=0, sticky=N+S+E+W)
+        self.message_list = Listbox(self.message_frame)
+        self.message_list.grid(row=1, column=0, sticky=N+S+E+W)
         self.message_scrollbar = Scrollbar(self.message_frame)
         self.message_scrollbar.grid(row=1, column=1, sticky=N+S+E+W)
-        self.message_scrollbar.config(command=self.message_history.yview)
-        self.message_history.config(yscrollcommand=self.message_scrollbar.set)
+        self.message_scrollbar.config(command=self.message_list.yview)
+        self.message_list.config(yscrollcommand=self.message_scrollbar.set)
 
         # Set up the message input.
         self.chat_entry = Entry(self.message_frame)
-        self.chat_entry.bind("<Return>", self.send_message)
+        self.chat_entry.bind("<Return>", self.on_send_message)
         self.chat_entry.grid(row=2, column=0, columnspan=2, sticky=N+S+E+W, pady=(5, 0), ipady=5)
         self.chat_entry.focus_set()
 
@@ -323,54 +325,101 @@ class ChatWindow:
             label.grid(row=i, sticky=E+W)
         self.friends_list.grid(row=1)
 
-    def create_group(self):
-        return
+    """
+    Displays the existing messages for the current room.
+    """
+    def refresh_message_list(self):
+        # Remove messages already in the pane.
+        self.message_list.delete(0, END)
 
-    """
-    Shows a dialog for adding a friend.
-    """
-    def add_friend(self):
-        username = PromptWindow.prompt(self.window, "Type in a username")
-        self.proxy.add_friend(token=self.token, username=username)
-        self.refresh_friends_list()
+        # If we are talking to a user,
+        if self.dest_username:
+            messages = self.proxy.get_messages_with_user(token=self.token, username=self.dest_username)
+        # If we are in a group
+        elif self.dest_group:
+            messages = self.proxy.get_messages_in_group(token=self.token, group=self.dest_group)
+        else:
+            return
+
+        for message in messages:
+            self.display_message(message)
 
     """
     Sets the message destination to a user.
     """
     def choose_user(self, username):
+        self.dest_group = None
         self.dest_username = username
         self.message_title.config(text=username)
+        self.refresh_message_list()
 
     """
     Sets the message destination to a group.
     """
     def choose_group(self, group):
+        self.dest_username = None
         self.dest_group = group
         self.message_title.config(text=self.proxy.get_group(group)["name"])
+        self.refresh_message_list()
 
-    def send_message(self, event):
+    """
+    Displays a message in the chat history.
+    """
+    def display_message(self, message):
+        self.message_list.insert(END, message["sender"] + ": " + message["text"])
+
+    def on_create_group(self):
+        return
+
+    """
+    Shows a dialog for adding a friend.
+    """
+    def on_add_friend(self):
+        username = PromptWindow.prompt(self.window, "Type in a username")
+        self.proxy.add_friend(token=self.token, username=username)
+        self.refresh_friends_list()
+
+    """
+    Handles the event for sending a message.
+    """
+    def on_send_message(self, event):
         text = self.chat_entry.get()
 
+        # Slash commands are evaluated as Python code...
         if text[0] == "/":
             exec(text[1:])
-        else:
-            if self.dest_username:
-                self.proxy.send_message(
-                    token=self.token,
-                    receiver={
-                        "type": "user",
-                        "username": self.dest_username,
-                    },
-                    text=text
-                )
+        # If we are talking to a user,
+        elif self.dest_username:
+            self.proxy.send_message(
+                token=self.token,
+                receiver={
+                    "type": "user",
+                    "username": self.dest_username,
+                },
+                text=text
+            )
+        # If we are in a group
+        elif self.dest_group:
+            self.proxy.send_message(
+                token=self.token,
+                receiver={
+                    "type": "group",
+                    "username": self.dest_group,
+                },
+                text=text
+            )
 
+        # Clear the message entry.
         self.chat_entry.delete(0, END)
 
+    """
+    Callback that runs periodically to display incoming messages in real-time.
+    """
     def check_message_queue(self):
         while True:
             try:
                 message = message_queue.get(False)
-                self.message_history.insert(END, message["sender"] + ": " + message["text"])
+                self.display_message(message)
             except queue.Empty:
                 break
 
