@@ -175,7 +175,6 @@ class LoginWindow:
             self.show_login()
         except Exception as e:
             messagebox.showerror("", "Could not connect to server.\n\nError: " + str(e))
-            self.window.wait_window()
 
     def on_login(self):
         username = self.username_entry.get()
@@ -189,12 +188,10 @@ class LoginWindow:
             ChatWindow(self.window, self.proxy, token)
         except rpc.RpcException as e:
             messagebox.showerror("", "Log in failed.\n\nError: " + str(e))
-            self.window.wait_window()
 
     def on_register(self):
         if self.repassword_entry.get() != self.password_entry.get():
             messagebox.showerror("", "Password must match in both entries")
-            self.window.wait_window()
             return
 
         try:
@@ -207,12 +204,10 @@ class LoginWindow:
                 address = self.address_entry.get()
             )
             messagebox.showinfo("", "Account created successfully!")
-            self.window.wait_window()
             # Go back to login
             self.show_login()
         except rpc.RpcException as e:
             messagebox.showerror("", "Registration failed.\n\nError: " + str(e))
-            self.window.wait_window()
 
     def center(self):
         self.window.update_idletasks()
@@ -259,13 +254,15 @@ class ChatWindow:
         self.friends_frame.grid(row=0, column=2, sticky=N+S+E+W, padx=10, pady=10)
 
         # Groups frame.
-        Label(self.group_frame, text="Groups").grid()
+        Label(self.group_frame, text="Groups").grid(pady=(0,10))
         self.group_frame.rowconfigure(1, weight=1)
         self.group_list = None
-        Button(self.group_frame, text="Create group", command=self.on_create_group).grid(row=2)
+        Button(self.group_frame, text="Add user", command=self.on_add_group_user).grid(row=2)
+        Button(self.group_frame, text="Remove user", command=self.on_remove_group_user).grid(row=3)
+        Button(self.group_frame, text="New group", command=self.on_create_group).grid(row=4)
 
         # Friends frame.
-        Label(self.friends_frame, text="Friends").grid()
+        Label(self.friends_frame, text="Friends").grid(pady=(0,10))
         self.friends_frame.rowconfigure(1, weight=1)
         self.friends_list = None
         Button(self.friends_frame, text="Add friend", command=self.on_add_friend).grid(row=2)
@@ -274,7 +271,7 @@ class ChatWindow:
         self.message_frame.rowconfigure(1, weight=1)
         self.message_frame.columnconfigure(0, weight=1)
         self.message_title = Label(self.message_frame)
-        self.message_title.grid(row=0, column=0, columnspan=2, sticky=N+S+E+W)
+        self.message_title.grid(row=0, column=0, columnspan=2, pady=(0,10), sticky=N+S+E+W)
         self.message_list = Listbox(self.message_frame)
         self.message_list.grid(row=1, column=0, sticky=N+S+E+W)
         self.message_scrollbar = Scrollbar(self.message_frame)
@@ -305,10 +302,11 @@ class ChatWindow:
             self.group_list.destroy()
 
         self.group_list = Frame(self.group_frame)
-        for i, group in enumerate(groups):
-            label = Button(self.group_list, text=group, command=lambda: self.choose_group(group))
+        for i, id in enumerate(groups):
+            group = self.proxy.get_group(token=self.token, id=id)
+            label = Button(self.group_list, text=group["name"], command=lambda g=id: self.choose_group(g))
             label.grid(row=i, sticky=E+W)
-        self.group_list.grid(row=1)
+        self.group_list.grid(row=1, sticky=N+E+W)
 
     """
     Refreshes the list of friends from the server.
@@ -321,9 +319,9 @@ class ChatWindow:
 
         self.friends_list = Frame(self.friends_frame)
         for i, username in enumerate(friends):
-            label = Button(self.friends_list, text=username, command=lambda: self.choose_user(username))
+            label = Button(self.friends_list, text=username, command=lambda u=username: self.choose_user(u))
             label.grid(row=i, sticky=E+W)
-        self.friends_list.grid(row=1)
+        self.friends_list.grid(row=1, sticky=N+E+W)
 
     """
     Displays the existing messages for the current room.
@@ -350,16 +348,18 @@ class ChatWindow:
     def choose_user(self, username):
         self.dest_group = None
         self.dest_username = username
-        self.message_title.config(text=username)
+        self.message_title.config(text="User: " + username)
         self.refresh_message_list()
 
     """
     Sets the message destination to a group.
     """
-    def choose_group(self, group):
+    def choose_group(self, group_id):
         self.dest_username = None
-        self.dest_group = group
-        self.message_title.config(text=self.proxy.get_group(group)["name"])
+        self.dest_group = group_id
+        group = self.proxy.get_group(token=self.token, id=group_id)
+
+        self.message_title.config(text="Group: " + group["name"])
         self.refresh_message_list()
 
     """
@@ -368,8 +368,33 @@ class ChatWindow:
     def display_message(self, message):
         self.message_list.insert(END, message["sender"] + ": " + message["text"])
 
+    """
+    Shows a dialog for adding a user to a group.
+    """
+    def on_add_group_user(self):
+        if self.dest_group:
+            username = PromptWindow.prompt(self.window, "Type in a username")
+            self.proxy.add_group_user(token=self.token, group=self.dest_group, username=username)
+            self.refresh_groups_list()
+            self.choose_group(self.dest_group)
+
+    """
+    Shows a dialog for removing a user from a group.
+    """
+    def on_remove_group_user(self):
+        if self.dest_group:
+            username = PromptWindow.prompt(self.window, "Type in a username")
+            self.proxy.remove_group_user(token=self.token, group=self.dest_group, username=username)
+            self.refresh_groups_list()
+            self.choose_group(self.dest_group)
+
+    """
+    Shows a dialog for creating a group.
+    """
     def on_create_group(self):
-        return
+        group_id = self.proxy.create_group(token=self.token)
+        self.refresh_groups_list()
+        self.choose_group(group_id)
 
     """
     Shows a dialog for adding a friend.
@@ -404,7 +429,7 @@ class ChatWindow:
                 token=self.token,
                 receiver={
                     "type": "group",
-                    "username": self.dest_group,
+                    "id": self.dest_group,
                 },
                 text=text
             )
@@ -449,12 +474,13 @@ class PromptWindow:
         self.window.title(title)
 
         self.label = Label(self.window, text=title)
-        self.label.grid()
+        self.label.grid(padx=10, pady=10)
         self.entry = Entry(self.window)
-        self.entry.bind("<Return>", lambda e: self.submit)
-        self.entry.grid(row=1)
+        self.entry.bind("<Return>", lambda e: self.submit())
+        self.entry.grid(row=1, padx=10)
+        self.entry.focus_set()
         self.button = Button(self.window, text="OK", command=self.submit)
-        self.button.grid(row=2)
+        self.button.grid(row=2, padx=10, pady=10)
 
     def submit(self):
         self.result = self.entry.get()
