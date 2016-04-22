@@ -493,7 +493,12 @@ def run():
 
     # Make tkinter less ugly.
     style = Style()
-    style.theme_use("clam")
+    if "vista" in style.theme_names():
+        style.theme_use("vista")
+    if "aqua" in style.theme_names():
+        style.theme_use("aqua")
+    else:
+        style.theme_use("clam")
     style.configure("Title.TLabel", font=("Helvetica", 16))
 
     # Show window.
